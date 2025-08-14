@@ -1,26 +1,10 @@
 // src/App.jsx
-import React, { useState, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc, query, onSnapshot, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
-
-// Global variables provided by the Canvas environment
-// These are automatically injected by the Canvas runtime, so no need to replace them manually.
-const appId = typeof __app_id !== 'undefined' ? __app_id : '1:258131252421:web:b54c7ed6a504661f6accac';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-  apiKey: "REMOVEDREMOVED",
-  authDomain: "storyteller-5a897.firebaseapp.com",
-  projectId: "storyteller-5a897",
-  storageBucket: "storyteller-5a897.firebasestorage.app",
-  messagingSenderId: "258131252421",
-  appId: "1:258131252421:web:b54c7ed6a504661f6accac",
-  // measurementId: "YOUR_MEASUREMENT_ID" // Include if you enabled Analytics
-};
-const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+import React, { useState, useEffect } from "react";
+import { auth, db } from "./firebase"; 
+import { onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "firebase/auth";
+import { collection, addDoc, query, onSnapshot, serverTimestamp, doc, updateDoc } from "firebase/firestore";
 
 function App() {
-  const [db, setDb] = useState(null);
-  const [auth, setAuth] = useState(null);
   const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [storyKeywords, setStoryKeywords] = useState('');
@@ -31,51 +15,46 @@ function App() {
   const [lastGeneratedStoryId, setLastGeneratedStoryId] = useState(null);
   const [showPastStories, setShowPastStories] = useState(false);
 
+  // replace with your actual appId (or import from env)
+  const appId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
+  const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+  // Auth listener
   useEffect(() => {
-    try {
-      const app = initializeApp(firebaseConfig);
-      const firestore = getFirestore(app);
-      const firebaseAuth = getAuth(app);
-      setDb(firestore);
-      setAuth(firebaseAuth);
-
-      const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
-        if (user) {
-          setUserId(user.uid);
-          setMessage(`Signed in as: ${user.uid}`);
-        } else {
-          try {
-            if (initialAuthToken) {
-              await signInWithCustomToken(firebaseAuth, initialAuthToken);
-              setMessage('Signed in with custom token.');
-            } else {
-              await signInAnonymously(firebaseAuth);
-              setMessage('Signed in anonymously.');
-            }
-          } catch (error) {
-            console.error('Error during sign-in:', error);
-            setMessage(`Sign-in error: ${error.message}`);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setUserId(user.uid);
+        setMessage(`Signed in as: ${user.uid}`);
+      } else {
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
+            setMessage("Signed in with custom token.");
+          } else {
+            await signInAnonymously(auth);
+            setMessage("Signed in anonymously.");
           }
+        } catch (error) {
+          console.error("Error during sign-in:", error);
+          setMessage(`Sign-in error: ${error.message}`);
         }
-        setIsAuthReady(true);
-      });
+      }
+      setIsAuthReady(true);
+    });
 
-      return () => unsubscribe();
-    } catch (error) {
-      console.error("Error initializing Firebase:", error);
-      setMessage(`Firebase Init Error: ${error.message}`);
-    }
+    return () => unsubscribe();
   }, []);
 
+  // Fetch stories in realtime
   useEffect(() => {
     if (isAuthReady && db && userId) {
       const storiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories`);
       const q = query(storiesCollectionRef);
 
       const unsubscribe = onSnapshot(q, (snapshot) => {
-        const fetchedStories = snapshot.docs.map(doc => ({
+        const fetchedStories = snapshot.docs.map((doc) => ({
           id: doc.id,
-          ...doc.data()
+          ...doc.data(),
         }));
         fetchedStories.sort((a, b) => (b.timestamp?.toDate() || 0) - (a.timestamp?.toDate() || 0));
         setStories(fetchedStories);
@@ -88,19 +67,20 @@ function App() {
     }
   }, [db, userId, isAuthReady]);
 
+  // Generate story
   const generateStory = async () => {
     if (!storyKeywords.trim()) {
-      setMessage('Please enter some keywords for your story.');
+      setMessage("Please enter some keywords for your story.");
       return;
     }
     if (!db || !userId) {
-      setMessage('Firebase not initialized or user not authenticated.');
+      setMessage("Firebase not initialized or user not authenticated.");
       return;
     }
 
     setIsLoading(true);
-    setMessage('Generating your story...');
-    setGeneratedStory('');
+    setMessage("Generating your story...");
+    setGeneratedStory("");
     setLastGeneratedStoryId(null);
 
     try {
@@ -108,9 +88,9 @@ function App() {
       const requestBody = { keywords: storyKeywords, userId: userId, appId: appId };
 
       const response = await fetch(cloudFunctionUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -122,7 +102,7 @@ function App() {
       const generatedText = data.story;
 
       setGeneratedStory(generatedText);
-      setMessage('Story generated! Please provide feedback.');
+      setMessage("Story generated! Please provide feedback.");
 
       const storiesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/stories`);
       const newStoryDocRef = await addDoc(storiesCollectionRef, {
@@ -130,39 +110,37 @@ function App() {
         keywords: storyKeywords,
         story: generatedText,
         timestamp: serverTimestamp(),
-        feedback: null
+        feedback: null,
       });
       setLastGeneratedStoryId(newStoryDocRef.id);
-      setStoryKeywords('');
-
+      setStoryKeywords("");
     } catch (error) {
-      console.error('Error generating story:', error);
+      console.error("Error generating story:", error);
       setMessage(`Error: ${error.message}`);
-      setGeneratedStory('Failed to generate story.');
+      setGeneratedStory("Failed to generate story.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Feedback
   const submitFeedback = async (storyId, feedbackType) => {
     if (!db || !userId || !storyId) {
-      setMessage('Firebase not initialized, user not authenticated, or story ID missing.');
+      setMessage("Firebase not initialized, user not authenticated, or story ID missing.");
       return;
     }
     setMessage(`Submitting feedback for story ${storyId}...`);
     try {
       const storyDocRef = doc(db, `artifacts/${appId}/users/${userId}/stories`, storyId);
       await updateDoc(storyDocRef, {
-        feedback: { type: feedbackType, timestamp: serverTimestamp() }
+        feedback: { type: feedbackType, timestamp: serverTimestamp() },
       });
       setMessage(`Feedback '${feedbackType}' submitted!`);
     } catch (error) {
-      console.error('Error submitting feedback:', error);
+      console.error("Error submitting feedback:", error);
       setMessage(`Error submitting feedback: ${error.message}`);
     }
   };
-
-  
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-200 via-pink-100 to-blue-200 p-6 font-inter text-gray-800">
@@ -194,8 +172,8 @@ function App() {
             disabled={isLoading}
             className={`w-full py-3 px-6 rounded-lg font-semibold text-white transition duration-300 ${
               isLoading
-                ? 'bg-gray-400 cursor-not-allowed'
-                : 'bg-indigo-600 hover:bg-indigo-700 shadow-md'
+                ? "bg-gray-400 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-700 shadow-md"
             }`}
           >
             {isLoading ? "Crafting your epic tale..." : "Generate Story"}
@@ -203,7 +181,7 @@ function App() {
         </div>
 
         {message && (
-          <div className={`p-3 rounded-lg text-center shadow ${message.includes('Error') ? 'bg-red-200 text-red-800' : 'bg-green-200 text-green-800'}`}>
+          <div className={`p-3 rounded-lg text-center shadow ${message.includes("Error") ? "bg-red-200 text-red-800" : "bg-green-200 text-green-800"}`}>
             {message}
           </div>
         )}
@@ -213,11 +191,11 @@ function App() {
             <h2 className="text-2xl font-bold text-indigo-700">Your Story</h2>
             <p className="whitespace-pre-wrap">{generatedStory}</p>
             <div className="flex flex-wrap gap-3">
-              <button onClick={() => submitFeedback(lastGeneratedStoryId, 'loved')} className="py-2 px-4 bg-green-500 text-white rounded-lg">Loved it!</button>
-              <button onClick={() => submitFeedback(lastGeneratedStoryId, 'too_short')} className="py-2 px-4 bg-yellow-500 text-white rounded-lg">Too short</button>
-              <button onClick={() => submitFeedback(lastGeneratedStoryId, 'more_humor')} className="py-2 px-4 bg-blue-500 text-white rounded-lg">More humor</button>
-              <button onClick={() => submitFeedback(lastGeneratedStoryId, 'more_adventure')} className="py-2 px-4 bg-purple-500 text-white rounded-lg">More adventure</button>
-              <button onClick={() => submitFeedback(lastGeneratedStoryId, 'not_my_style')} className="py-2 px-4 bg-red-500 text-white rounded-lg">Not my style</button>
+              <button onClick={() => submitFeedback(lastGeneratedStoryId, "loved")} className="py-2 px-4 bg-green-500 text-white rounded-lg">Loved it!</button>
+              <button onClick={() => submitFeedback(lastGeneratedStoryId, "too_short")} className="py-2 px-4 bg-yellow-500 text-white rounded-lg">Too short</button>
+              <button onClick={() => submitFeedback(lastGeneratedStoryId, "more_humor")} className="py-2 px-4 bg-blue-500 text-white rounded-lg">More humor</button>
+              <button onClick={() => submitFeedback(lastGeneratedStoryId, "more_adventure")} className="py-2 px-4 bg-purple-500 text-white rounded-lg">More adventure</button>
+              <button onClick={() => submitFeedback(lastGeneratedStoryId, "not_my_style")} className="py-2 px-4 bg-red-500 text-white rounded-lg">Not my style</button>
             </div>
           </div>
         )}
